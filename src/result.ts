@@ -1,72 +1,123 @@
-export type Result<T, E extends Error> = OkResult<T> | ErrResult<E>;
-export type OkResult<T> = { value: T; isOk: true; isErr: false };
-export type ErrResult<E extends Error> = { value: E; isOk: false; isErr: true };
-export type MatchResultOptions<T, E extends Error> = {
+export type MatchResultOptions<T, E> = {
   ok: (value: T) => any;
   err: (err: E) => any;
 };
+
 export function ok<T>(value: T): OkResult<T> {
-  return Object.freeze({ value, isOk: true, isErr: false });
+  return new OkResult(value)
 }
 
-export function err<E extends Error>(value: E): ErrResult<E> {
-  return Object.freeze({ value, isOk: false, isErr: true });
+export function err<E>(value: E): ErrResult<E> {
+  return new ErrResult(value)
 }
 
-export function isResult<T, E extends Error>(value: Result<T, E>): value is Result<T, E> {
-  if (typeof value !== "object" || value === null) return false;
-  return ["value", "isOk", "isErr"].every((attr) => value.hasOwnProperty(attr));
+export function isResult<T, E>(value: Result<T, E>): value is Result<T, E> {
+  return value instanceof Result
 }
 
-export function matchResult<T, E extends Error>(
-  result: Result<T, E>,
-  options: MatchResultOptions<T, E>
-): any {
-  if (result.isOk) {
-    return options.ok(result.value);
+export async function fromPromise<T, E>(promise: Promise<T>): Promise<Result<T, E>> {
+  try {
+    const value = await promise
+    return ok(value)
+  } catch(e) {
+    return err(e as E)
+  }
+}
+
+export class Result<T, E> {
+  constructor(private readonly value: T | E) {}
+
+  isErr() { 
+    return this instanceof ErrResult
+  }
+  
+  isOk() { 
+    return !this.isErr()
   }
 
-  return options.err(result.value);
-}
-
-
-export function unwrap<T, E extends Error>(result: Result<T, E>): T {
-  if (result.isOk) {
-    return result.value;
+  match(options: MatchResultOptions<T, E>): any {
+    try {
+      const value = this.unwrap()
+      return options.ok(value)
+    } catch (e) {
+      return options.err(e as E)
+    }
   }
 
-  throw result.value;
-}
-
-export function unwrapOrElse<T, E extends Error>(
-  result: Result<T, E>,
-  fn: (result: Result<T, E>) => T
-): T {
-  if (result.isOk) {
-    return result.value;
+  unwrap(): T {
+    if (this.isOk()) {
+      return this.value as T;
+    }
+  
+    throw this.value;
   }
 
-  return fn(result);
+  unwrapErr(): E {
+    if (this.isErr()) {
+      return this.value as E
+    }
+
+    throw new Error(`Result value is not an error: ${this.value}`)
+  }
+
+  unwrapOrElse(fn: (result: E) => T): T {
+    return this.match({
+      ok: (value) => value,
+      err: (e) => fn(e)
+    })
+  }
+
+  unwrapOrDefault(defaultValue: T): T {
+    return this.unwrapOrElse(() => defaultValue)
+  }
+
+  mapOk<U>(
+    fn: (value: T) => U
+  ): Result<U, E> {
+    return this.isOk()
+      ? ok(fn(this.unwrap()))
+      : err(this.unwrapErr())
+  }
+
+  mapErr<U>(
+    fn: (value: E) => U
+  ): Result<T, U> {
+    return this.isErr()
+    ? err(fn(this.unwrapErr()))
+    : ok(this.unwrap())
+  }
 }
 
-export function unwrapOrDefault<T, E extends Error>(
-  result: Result<T, E>,
-  defaultValue: T
-): T {
-  return unwrapOrElse(result, () => defaultValue);
+class OkResult<T> extends Result<T, never> {
+  constructor(value: T) {
+    super(value)
+  }
 }
 
-export function mapOk<T, E extends Error, U>(
-  result: Result<T, E>,
-  fn: (value: T) => U
-): Result<U, E> {
-  return result.isOk ? ok(fn(result.value)) : result;
+class ErrResult<E> extends Result<never, E> {
+  constructor(value: E) {
+    super(value)
+  }
+
+  unwrapOrElse<U>(fn: (result: E) => U): U {
+    return fn(this.unwrapErr())
+  }
+
+  unwrapOrDefault<U>(defaultValue: U): U {
+    return defaultValue
+  }
+
+  mapErr<U>(fn: (value: E) => U): ErrResult<U> {
+    return new ErrResult(fn(this.unwrapErr()))
+  }
 }
 
-export function mapErr<T, E extends Error, U extends Error>(result: Result<T, E>, fn: (value: E) => U): Result<T, U> {
-  return result.isErr ? err(fn(result.value)) : result;
+function getNumber(fail = false): Result<number, Error> {
+  if (fail) {
+    return err(new Error('foo'))
+  }
+
+  return ok(10)
 }
 
-export function fromPromise<T>(promise: Promise<T>): Promise<Result<T, Error>> {
-  return promise.then((value) => ok(value)).catch((e) => err(e));
-}
+console.log(err('').mapErr(() => "some string").mapOk(() => 10).unwrapOrDefault(100))
